@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 import numpy as np
 import pytorch_lightning as pl
 import torch
-from huggingface_hub import cached_download, hf_hub_url
+from huggingface_hub import hf_hub_download
 from lightning_fabric.utilities.cloud_io import _load as pl_load
 
 from torch import nn
@@ -314,25 +314,31 @@ class Mayamodel(pl.LightningModule):
                 model_id = checkpoint
                 revision_id = None
 
-            url = hf_hub_url(
-                model_id, filename=HF_TORCH_WEIGHTS, revision=revision_id
-            )
-            model_path_pl = cached_download(
-                url=url,
+            model_path_pl = hf_hub_download(
+                repo_id=model_id,
+                filename=HF_TORCH_WEIGHTS,
+                revision=revision_id,
                 library_name="mayavoz",
                 library_version=__version__,
                 cache_dir=cached_dir,
-                use_auth_token=use_auth_token,
+                token=use_auth_token,
             )
 
         if map_location is None:
             map_location = torch.device(DEFAULT_DEVICE)
 
-        loaded_checkpoint = pl_load(model_path_pl, map_location)
+        loaded_checkpoint = torch.load(model_path_pl, map_location=map_location, weights_only=False)
         module_name = loaded_checkpoint[SAVE_NAME]["architecture"]["module"]
         class_name = loaded_checkpoint[SAVE_NAME]["architecture"]["class"]
         module = import_module(module_name)
         Klass = getattr(module, class_name)
+
+        # Monkeypatch torch.load to force weights_only=False
+        original_load = torch.load
+        def safe_load(*args, **kwargs):
+            kwargs['weights_only'] = False
+            return original_load(*args, **kwargs)
+        torch.load = safe_load
 
         try:
             model = Klass.load_from_checkpoint(
@@ -344,6 +350,8 @@ class Mayamodel(pl.LightningModule):
             )
         except Exception as e:
             print(e)
+        finally:
+            torch.load = original_load
 
         return model
 
